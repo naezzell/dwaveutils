@@ -1,0 +1,4 @@
+Repo designed to make it easier to inteface with D-Wave's quantum annealers, 
+both simulators and real Quantum Processing Units. In the future, this
+repo will probably be generalized to facilitate all quantum annealing type
+problems.
