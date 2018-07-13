@@ -187,7 +187,8 @@ class DictRep(ProbRep):
     def visualize_graph(self):
         G = nx.Graph()
         G.add_edges_from(self.couplers)
-        return nx.draw_networkx(G)
+        nx.draw_networkx(G)
+        return G
     
     def save_data(self, filename):
         self.data.to_csv(filename, index = False)
