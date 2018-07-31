@@ -235,11 +235,11 @@ class DictRep(ProbRep):
         #ax2.grid(None)
         
         if filename:
-            plt.savefig(filename)
+            plt.savefig(filename, dpi = 300)
             
         return plt
     
-    def get_ferro_diagram(self, xparam, yparam, divideby=None):
+    def get_ferro_diagram(self, xparam, yparam, divideby=None, title=''):
         """
         Plot the probability that output states are ferromagnetic on a contour plot
         with xaxis as xparam/divdeby and yaxis as yparam/divideby.
@@ -272,6 +272,7 @@ class DictRep(ProbRep):
         
         #plot the figure
         plt.figure()
+        plt.title(title)
         plt.contourf(X, Y, pfm_meshgrid, np.arange(0, 1.2, .2), cmap='viridis', extent=(-4, 4, 0, 4))
         cbar = plt.colorbar(ticks=np.arange(0, 1.2, .2))
         cbar.ax.set_title('$P_{FM}$')
@@ -280,6 +281,9 @@ class DictRep(ProbRep):
         plt.ylabel(ylabel)
  
         return plt
+
+    def sudden_anneal_test(self):
+        pass
 
     def get_QUBO_rep(self):
         pass

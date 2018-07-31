@@ -62,8 +62,8 @@ def make_anneal_schedule(direction, s, ta, tp=0, tq=0):
     mint, maxt = sampler.properties["annealing_time_range"]
 
     # first, ensure that quench slope is within chip bounds
-    if tq != 0 and tq < mint:
-        raise ValueError("Minimum value of tq possible by chip is: {mint}".format(mint=mint))
+    #if tq != 0 and tq < mint:
+    #    raise ValueError("Minimum value of tq possible by chip is: {mint}".format(mint=mint))
     # now, check that anneal time is not too long (quench has equivalent anneal time)
     if (ta + tp + tq) > maxt:
         raise ValueError("Maximum allowed anneal time is: {maxt}.".format(maxt=maxt))

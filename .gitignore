@@ -102,3 +102,6 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# a personal testing directory that gets messy
+/personaltests
