@@ -1,9 +1,174 @@
 # import dependencies
 import numpy as np
+from functools import reduce
 from dwave.system.samplers import DWaveSampler
 import itertools
 from collections import OrderedDict
 import pandas as pd
+import qutip as qt
+import qutip.states as qts
+import qutip.operators as qto
+
+
+def s_of_t(samplerate, **kwargs):
+    """
+    Creates an anneal_schdule to be used for numerical calculatins with QuTip. 
+    Returns times and svals associated with each time that [times, svals]
+    that together define an anneal schedule.
+    
+    Inputs: 
+    samplerate: amount of discretization between each PWL portion of s(t) (int or list of ints)
+    kwargs: dictionary that contains optional key-value args
+    optional args: sa, ta, tp, tq
+        sa: s value to anneal to 
+        ta: time it takes to anneal to sa
+        tp: time to pause after reaching sa
+        tq: time to quench from sa to s = 1
+    """
+    # make anneal schedule with anneal, pause, and quench
+    if ('ta' in kwargs and 'tp' in kwargs and 'tq' in kwargs):
+        # determine slopes and y-intercept (bq) to create piece-wise function
+        sa = kwargs['sa']; ta = kwargs['ta']; tp = kwargs['tp']; tq = kwargs['tq']; 
+        ma = sa / ta
+        mp = 0
+        mq = (1 - sa) / tq
+        bq = (sa*(ta + tp + tq) - (ta + tp))/tq
+        
+        # create a list of times with samplerate elements from 0 and T = ta + tp + tq
+        if type(samplerate) == int:
+            samplerate = [samplerate for x in range(3)]
+        t = reduce(np.union1d, (np.linspace(0, ta, samplerate[0]),
+                                np.linspace(ta+.00001, ta+tp, samplerate[1]),
+                                np.linspace(ta+tp+.00001, ta+tp+tq, samplerate[2])))
+        
+        # create a piece-wise-linear (PWL) s(t) function defined over t values
+        sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
+                             [lambda t: ma*t, lambda t: sa, lambda t: bq + mq*t])
+        
+    # make anneal schedule with anneal and quench (no pause)
+    elif ('ta' in kwargs and 'tq' in kwargs):
+        # determine slopes and y-intercept (bq) to create piece-wise function
+        sa = kwargs['sa']; ta = kwargs['ta']; tq = kwargs['tq']; 
+        ma = sa / ta
+        mq = (1 - sa) / tq
+        bq = (sa*(ta + tq) - ta)/tq
+        
+        # create a list of times with samplerate elements from 0 to T = ta + tq
+        if type(samplerate) == int:
+            samplerate = [samplerate for x in range(2)]
+        t = reduce(np.union1d, (np.linspace(0, ta, samplerate[0]),
+                                np.linspace(ta+.00001, ta+tq, samplerate[1])))
+        
+        # create a piece-wise-linear (PWL) s(t) function defined over t values
+        sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
+                            [lambda t: ma*t, lambda t: bq + mq*t])
+
+    # otherwise, perform a standard old forward anneal
+    else:
+        # determine slopes and y-intercept (bq) to create piece-wise function
+        sa = 1; ta = kwargs['ta'];
+        ma = sa / ta
+        
+        # create a list of times with samplerate elements from 0 to T = ta
+        if type(samplerate) == int:
+            samplerate = [samplerate for x in range(1)]
+        t = np.linspace(0, ta, samplerate[0])
+        
+        # create a piece-wise-linear (PWL) s(t) function defined over t values
+        sfunc = ma*t
+        
+    return [t, sfunc]
+
+def nqubit_1pauli(pauli, i, n):
+    """
+    Creates a single-qubit pauli operator on qubit i (0-based)
+    that acts on n qubits. (padded with identities).
+    
+    For example, pauli = Z, i = 1 and n = 3 gives:
+    Z x I x I, an 8 x 8 matrix
+    """ 
+    #create identity padding
+    iden1 = [qto.identity(2) for j in range(i)]
+    iden2 = [qto.identity(2) for j in range(n-i-1)]
+    
+    #combine into total operator list that is in proper order
+    oplist = iden1 + [pauli] + iden2
+    
+    #create final operator by using tensor product on unpacked operator list
+    operator = qt.tensor(*oplist)
+    
+    return operator
+
+def nqubit_2pauli(ipauli, jpauli, i, j, n):
+    """
+    Creates a 2 qubit x/y/z pauli operator on qubits i,j
+    with i < j that acts on n qubits in total.
+    
+    For example, ipauli = Y, jpauli = Z, i = 1, j = 2 and n = 3 gives:
+    Y x Z x I, an 8 x 8 matrix
+    """ 
+    #create identity padding
+    iden1 = [qto.identity(2) for m in range(i)]
+    iden2 = [qto.identity(2) for m in range(j-i-1)]
+    iden3 = [qto.identity(2) for m in range(n-j-1)]
+    
+    #combine into total operator list
+    oplist = iden1 + [ipauli] + iden2 + [jpauli] + iden3
+    
+    # apply tensor product on unpacked oplist
+    operator = qt.tensor(*oplist)
+    
+    return operator
+
+def dict_to_qutip(dictrep, encoded_params=None):
+    """
+    Takes a DictRep Ising Hamiltonian and converts it to a QuTip Ising Hamiltonian.
+    Encoded params must be passed if dictrep weights are variables (abstract) and 
+    not actual numbers. 
+    """
+    # make useful operators
+    sigmaz = qto.sigmaz()
+    nqbits = len(dictrep.qubits)
+    zeros = [qto.qzero(2) for m in range(nqbits)]
+    finalH = qt.tensor(*zeros)
+    
+    for key, value in dictrep.H.items():
+        if key[0] == key[1]:
+            if encoded_params:
+                finalH += encoded_params[value]*nqubit_1pauli(sigmaz, key[0], nqbits)
+            else:
+                finalH += value*nqubit_1pauli(sigmaz, key[0], nqbits)
+        else:
+            if encoded_params:
+                finalH += encoded_params[value]*nqubit_2pauli(sigmaz, sigmaz, key[0], key[1], nqbits)
+            else:
+                finalH += value*nqubit_2pauli(sigmaz, sigmaz, key[0], key[1], nqbits)
+            
+    return finalH
+
+def loadAandB(file="processor_annealing_schedule_DW_2000Q_2_June2018.csv"):
+    """
+    Loads in A(s) and B(s) data from chip and interpolates using QuTip's
+    cubic-spline function. Useful for numerical simulations.
+    
+    Returns (as list in this order):
+    svals: numpy array of discrete s values for which A(s)/B(s) are defined
+    Afunc: interpolated A(s) function
+    Bfunc: interpolated B(s) function
+    """
+    
+    Hdata = pd.read_csv(file)
+    # pd as in pandas Series form of data
+    pdA = Hdata['A(s) (GHz)']
+    pdB = Hdata['B(s) (GHz)']
+    pds = Hdata['s'] 
+    svals = np.array(pds)
+    
+    # interpolate A and B using cubic-spline of QuTip
+    Afunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], pdA)
+    Bfunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], pdB)
+    
+    return [svals, Afunc, Bfunc]
 
 
 def find_heff_s(h, eps, chipschedule):
