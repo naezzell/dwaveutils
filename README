@@ -1,4 +1,5 @@
 Repo designed to make it easier to inteface with D-Wave's quantum annealers, 
-both simulators and real Quantum Processing Units. In the future, this
-repo will probably be generalized to facilitate all quantum annealing type
-problems.
+both simulators and real Quantum Processing Units. Currently working on some 
+additional features to make it easier to submit custom problems and 
+adding support with QuTip to run open-system numerical simulations of 
+annealing to compare to D-Wave.
