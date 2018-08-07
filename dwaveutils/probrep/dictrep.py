@@ -89,8 +89,9 @@ class DictRep(ProbRep):
 
         # save values/ metadata
         self.H = copy.deepcopy(H)
-        self.wqubits = self.sampler.properties['qubits']
-        self.wcouplers = self.sampler.properties['couplers']
+        if encoding == 'direct':
+            self.wqubits = self.sampler.properties['qubits']
+            self.wcouplers = self.sampler.properties['couplers']
 
     def save_config(self, fname, config_data={}):
         """

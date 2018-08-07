@@ -153,6 +153,32 @@ def dict_to_qutip(dictrep, encoded_params=None):
             
     return finalH
 
+def time_interpolation(schedule, processor_data):
+    """
+    Interpolates the A(s) and B(s) functions in terms of time in accordance with an 
+    annealing schedule s(t). Returns cubic-splines amenable to use with QuTip. 
+    """
+    
+    svals = processor_data['svals']
+    Avals = processor_data['Avals']
+    Bvals = processor_data['Bvals']
+    
+    # interpolate Avals and Bvals into a cubic spline function
+    Afunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], Avals)
+    Bfunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], Bvals)
+        
+    # now, extract s(t)
+    times = schedule[0]
+    sprogression = schedule[1]
+    
+    # interpolate A/B funcs with respect to time with s(t) relationship implicitly carried through
+    sch_Afunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Afunc(sprogression))
+    sch_Bfunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Bfunc(sprogression))
+    
+    sch_ABfuncs = {'A(t)': sch_Afunc, 'B(t)': sch_Bfunc}
+    
+    return sch_ABfuncs
+
 def loadAandB(file="processor_annealing_schedule_DW_2000Q_2_June2018.csv"):
     """
     Loads in A(s) and B(s) data from chip and interpolates using QuTip's
@@ -169,46 +195,22 @@ def loadAandB(file="processor_annealing_schedule_DW_2000Q_2_June2018.csv"):
     pdA = Hdata['A(s) (GHz)']
     pdB = Hdata['B(s) (GHz)']
     pds = Hdata['s'] 
+    Avals = np.array(pdA)
+    Bvals = np.array(pdB)
     svals = np.array(pds)
     
-    # interpolate A and B using cubic-spline of QuTip
-    Afunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], pdA)
-    Bfunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], pdB)
+    processor_data = {'svals': svals, 'Avals': Avals, 'Bvals': Bvals}
     
-    return [svals, Afunc, Bfunc]
+    return processor_data
 
-def make_dwaveH(dictrep, schedule, filename=None):
-    """
-    Makes the full time-dependent (via s) TFIM of D-Wave from DictRep H
-    that only encodes the final annealing Hamiltonian
-    """
-    # first, get A(s) and B(s) functions
-    if filename:
-        svals, Afunc, Bfun = loadAandB(filename)
-    else:
-        svals, Afunc, Bfunc = loadAandB()
-        
-    # now, extract s(t)
-    times = schedule[0]
-    sprogression = schedule[1]
-    
-    Avals = Afunc(sprogression)
-    Bvals = Bfunc(sprogression)
-    
-    sch_Afunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Avals)
-    sch_Bfunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Bvals)
-     
-    # next, construct the final Hamiltonian encoded in DictRep
+def get_numeric_H(dictrep):
     HZ = dict_to_qutip(dictrep)
-    
-    # then, construct HX initial Hamiltonian
     nqbits = len(dictrep.qubits)
     HX = sum([nqubit_1pauli(qto.sigmax(), m, nqbits) for m in range(nqbits)])
     
-    # finally, make the total Hamiltonian
-    Hfinal = [[HX, Afunc], [HZ, Bfunc]]
+    H = {'HZ': HZ, 'HX': HX}
     
-    return Hfinal
+    return H
 
 
 def find_heff_s(h, eps, chipschedule):
