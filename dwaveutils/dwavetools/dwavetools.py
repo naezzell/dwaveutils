@@ -10,14 +10,14 @@ import qutip.states as qts
 import qutip.operators as qto
 
 
-def s_of_t(samplerate, **kwargs):
+def make_numeric_schedule(discretization, **kwargs):
     """
     Creates an anneal_schdule to be used for numerical calculatins with QuTip. 
     Returns times and svals associated with each time that [times, svals]
     that together define an anneal schedule.
     
     Inputs: 
-    samplerate: amount of discretization between each PWL portion of s(t) (int or list of ints)
+    discretization: determines what step size to use between points
     kwargs: dictionary that contains optional key-value args
     optional args: sa, ta, tp, tq
         sa: s value to anneal to 
@@ -25,57 +25,64 @@ def s_of_t(samplerate, **kwargs):
         tp: time to pause after reaching sa
         tq: time to quench from sa to s = 1
     """
-    # make anneal schedule with anneal, pause, and quench
-    if ('ta' in kwargs and 'tp' in kwargs and 'tq' in kwargs):
+    # Parse the kwargs input which encodes anneal schedule parameters
+    try:
+        ta = kwargs['ta']
+    except KeyError:
+        raise KeyError("An anneal schedule must at least include an anneal time, 'ta'")
+    
+    # extracts anneal parameter if present; otherwise, returns an empty string
+    sa = kwargs.get('sa', '')
+    tp = kwargs.get('tp', '')
+    tq = kwargs.get('tq', '')
+    
+    # turn discretization into samplerate multiplier
+    samplerate = 1 / discretization
+    
+    # if no sa present, create a standard forward anneal for ta seconds
+    if not sa:
+        # determine slope of anneal
+        sa = 1; ta = kwargs['ta'];
+        ma = sa / ta
+        
+        # create a list of times with (ta+1)*samplerate elements
+        t = np.linspace(0, ta, int((ta+1)*samplerate))
+        
+        # create linear s(t) function
+        sfunc = ma*t
+        
+    # if no pause present, anneal forward for ta to sa then quench for tq to s=1
+    elif not tq:
         # determine slopes and y-intercept (bq) to create piece-wise function
-        sa = kwargs['sa']; ta = kwargs['ta']; tp = kwargs['tp']; tq = kwargs['tq']; 
+        ma = sa / ta
+        mq = (1 - sa) / tq
+        bq = (sa*(ta + tq) - ta)/tq
+        
+        # create a list of times where sampling for anneal/ quench proportional to time there
+        t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
+                                np.linspace(ta+.00001, ta+tq, int((ta+tq+1)*samplerate))))
+        
+        # create a piece-wise-linear (PWL) s(t) function defined over t values
+        sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
+                            [lambda t: ma*t, lambda t: bq + mq*t])
+        
+    # otherwise, forward anneal, pause, then quench
+    else:
+        # determine slopes and y-intercept (bq) to create piece-wise function 
         ma = sa / ta
         mp = 0
         mq = (1 - sa) / tq
         bq = (sa*(ta + tp + tq) - (ta + tp))/tq
         
         # create a list of times with samplerate elements from 0 and T = ta + tp + tq
-        if type(samplerate) == int:
-            samplerate = [samplerate for x in range(3)]
-        t = reduce(np.union1d, (np.linspace(0, ta, samplerate[0]),
-                                np.linspace(ta+.00001, ta+tp, samplerate[1]),
-                                np.linspace(ta+tp+.00001, ta+tp+tq, samplerate[2])))
+        t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
+                                np.linspace(ta+.00001, ta+tp, int((ta+tp+1)*samplerate)),
+                                np.linspace(ta+tp+.00001, ta+tp+tq, int((ta+tp+tq+1)*samplerate))))
         
         # create a piece-wise-linear (PWL) s(t) function defined over t values
         sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
                              [lambda t: ma*t, lambda t: sa, lambda t: bq + mq*t])
         
-    # make anneal schedule with anneal and quench (no pause)
-    elif ('ta' in kwargs and 'tq' in kwargs):
-        # determine slopes and y-intercept (bq) to create piece-wise function
-        sa = kwargs['sa']; ta = kwargs['ta']; tq = kwargs['tq']; 
-        ma = sa / ta
-        mq = (1 - sa) / tq
-        bq = (sa*(ta + tq) - ta)/tq
-        
-        # create a list of times with samplerate elements from 0 to T = ta + tq
-        if type(samplerate) == int:
-            samplerate = [samplerate for x in range(2)]
-        t = reduce(np.union1d, (np.linspace(0, ta, samplerate[0]),
-                                np.linspace(ta+.00001, ta+tq, samplerate[1])))
-        
-        # create a piece-wise-linear (PWL) s(t) function defined over t values
-        sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
-                            [lambda t: ma*t, lambda t: bq + mq*t])
-
-    # otherwise, perform a standard old forward anneal
-    else:
-        # determine slopes and y-intercept (bq) to create piece-wise function
-        sa = 1; ta = kwargs['ta'];
-        ma = sa / ta
-        
-        # create a list of times with samplerate elements from 0 to T = ta
-        if type(samplerate) == int:
-            samplerate = [samplerate for x in range(1)]
-        t = np.linspace(0, ta, samplerate[0])
-        
-        # create a piece-wise-linear (PWL) s(t) function defined over t values
-        sfunc = ma*t
         
     return [t, sfunc]
 
@@ -170,6 +177,39 @@ def loadAandB(file="processor_annealing_schedule_DW_2000Q_2_June2018.csv"):
     
     return [svals, Afunc, Bfunc]
 
+def make_dwaveH(dictrep, schedule, filename=None):
+    """
+    Makes the full time-dependent (via s) TFIM of D-Wave from DictRep H
+    that only encodes the final annealing Hamiltonian
+    """
+    # first, get A(s) and B(s) functions
+    if filename:
+        svals, Afunc, Bfun = loadAandB(filename)
+    else:
+        svals, Afunc, Bfunc = loadAandB()
+        
+    # now, extract s(t)
+    times = schedule[0]
+    sprogression = schedule[1]
+    
+    Avals = Afunc(sprogression)
+    Bvals = Bfunc(sprogression)
+    
+    sch_Afunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Avals)
+    sch_Bfunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Bvals)
+     
+    # next, construct the final Hamiltonian encoded in DictRep
+    HZ = dict_to_qutip(dictrep)
+    
+    # then, construct HX initial Hamiltonian
+    nqbits = len(dictrep.qubits)
+    HX = sum([nqubit_1pauli(qto.sigmax(), m, nqbits) for m in range(nqbits)])
+    
+    # finally, make the total Hamiltonian
+    Hfinal = [[HX, Afunc], [HZ, Bfunc]]
+    
+    return Hfinal
+
 
 def find_heff_s(h, eps, chipschedule):
     """
@@ -205,7 +245,7 @@ def create_heff_csv(chipdataf, newfile):
     return "Great Success."
 
 
-def make_anneal_schedule(direction, s, ta, tp=0, tq=0):
+def make_dwave_schedule(direction, s, ta, tp=0, tq=0):
     """
     Function that creates basic anneal schedules with the following logic:
     anneal in (direction) for (ta) micro seconds until (s) reached,

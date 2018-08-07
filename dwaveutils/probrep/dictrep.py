@@ -21,6 +21,9 @@ import seaborn as sns
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import yaml
+import json
+import copy
 
 
 class DictRep(ProbRep):
@@ -61,7 +64,7 @@ class DictRep(ProbRep):
                 self.params_to_qubits.setdefault(value, []).append(key[0])
             else:
                 self.couplers.append(key)
-                self.params_to_couplers.setdefault(value, []). append(key)
+                self.params_to_couplers.setdefault(value, []).append(key)
 
         if qpu == 'dwave':
             try:
@@ -80,16 +83,70 @@ class DictRep(ProbRep):
 
             except:
                 raise ConnectionError("Cannot connect to DWave sampler. Have you created a DWave config file using 'dwave config create'?")
-                
+
         elif qpu == 'simulate':
             self.sampler = dimod.SimulatedAnnealingSampler()
 
         # save values/ metadata
+        self.H = copy.deepcopy(H)
+        self.wqubits = self.sampler.properties['qubits']
+        self.wcouplers = self.sampler.properties['couplers']
+
+    def save_config(self, fname, config_data={}):
+        """
+        Saves Hamiltonian configuration for future use
+        """
+        # if config data supplied, at least dump Hamiltonian
+        if config_data == {}:
+            config_data = {'H': self.H}
+
+        with open(fname + ".yml", 'w') as yamloutput:
+            yaml.dump(config_data, yamloutput)
+
+    def tile_H(self):
+        pqubits = self.qubits
+        pcouplers = self.couplers
+        wqubits = self.wqubits
+        wcouplers = self.wcouplers
+        H = copy.deepcopy(self.H)
+
+        for unitcell in range(1, 16 * 16):
+            # create list of qubits/couplers that should be working in this unit cell
+            unit_qubits = [q for q in range(8 * unitcell, 8 * (unitcell + 1))]
+            unit_couplers = [[q, q + (4 - q % 4) + i] for q in unit_qubits[:4] for i in range(4)]
+
+            # ensure that all qubits and couplers are working
+            if all(q in wqubits for q in unit_qubits) and all(c in wcouplers for c in unit_couplers):
+                # init_state.extend(init_state[:])
+                # copy the initial state
+                # if so, create copies of H on other unit cells
+                for q in unit_qubits:
+                    if (q % 8) in pqubits:
+                        H[(q, q)] = H[(q % 8, q % 8)]
+
+                for c in unit_couplers:
+                    if (c[0] % 8, c[1] % 8) in pcouplers:
+                        H[tuple(c)] = H[(c[0] % 8, c[1] % 8)]
+
+            # else:
+                #init_state.extend([3 for q in range(len(unit_qubits))])
+
+        #self.init_state = init_state
         self.H = H
+        self.qubits = []
+        self.params_to_qubits = {}
+        self.couplers = []
+        self.params_to_couplers = {}
+        for key, value in H.items():
+            if key[0] == key[1]:
+                self.qubits.append(key[0])
+                self.params_to_qubits.setdefault(value, []).append(key[0])
+            else:
+                self.couplers.append(key)
+                self.params_to_couplers.setdefault(value, []).append(key)
 
     def populate_parameters(self, parameters, rules=None):
-        # generate all independent combinations
-        # of parameters
+        # generate all independent combinations of parameters
         self.params = []
         self.values = []
         for key, value in parameters.items():
@@ -103,22 +160,27 @@ class DictRep(ProbRep):
         self.Jvrule = re.compile('J[0-9]*')
 
         # format pandas DataFrame
-        #columns = self.params[:]
-        #columns.extend(['energy', 'state'])
+        # columns = self.params[:]
+        # columns.extend(['energy', 'state'])
         self.data = pd.DataFrame()
         self.data.H = str(self.H)
         self.data.vartype = self.vartype
         self.data.encoding = self.encoding
 
-        return self.combos
+        return
 
-    def call_annealer(self, cull=False, s_to_hx={}):
+    def call_annealer(self, **kwargs):
         """
         Calls qpu on problem encoded by H.
         cull: bool
             if true, only outputs lowest energy states,
             otherwise shows all results
         """
+
+        # parse the input data
+        # cull = kwargs.get('cull', False)  # only takes lowest energy data
+        s_to_hx = kwargs.get('s_to_hx', '')  # relates s to transverse-field bias
+        spoint = kwargs.get('spoint', 0)  # can start sampling data midway through if interuptted
 
         # if H.values() only contains floats,
         # run sinlge problem as is
@@ -135,11 +197,12 @@ class DictRep(ProbRep):
                 return response
 
         # otherwise, run a parameter sweep
-        for combo in self.combos:
+        for combo in self.combos[spoint::]:
             # init single run's data/inputs
             rundata = {}
             runh = {}
             runJ = {}
+            optional_args = {}
             count = 0
             # map params to values in combo
             for param in self.params:
@@ -155,25 +218,37 @@ class DictRep(ProbRep):
 
                 elif param == 'anneal_schedule':
                     anneal_schedule = combo[count]
-                    #if transverse field terms, get hx
+                    optional_args['anneal_schedule'] = anneal_schedule
+                    # if transverse field terms, get hx
                     if s_to_hx:
                         hx = s_to_hx[anneal_schedule[1][1]]
                         rundata['hx'] = hx
-                    
+
                 elif param == 'num_reads':
                     num_reads = combo[count]
+                    optional_args['num_reads'] = num_reads
+
+                elif param == 'initial_state':
+                    initial_state = combo[count]
+                    optional_args['initial_state'] = initial_state
+
+                elif param == 'reinitialize_state':
+                    reinitialize_state = combo[count]
+                    optional_args['reinitialize_state'] = reinitialize_state
 
                 count += 1
 
             # run the sim and collect data
             if self.qpu == 'dwave':
-                response = self.sampler.sample_ising(h=runh, J=runJ, anneal_schedule=anneal_schedule, num_reads=num_reads)
+
+                response = self.sampler.sample_ising(h=runh, J=runJ, **optional_args)
+
                 for energy, state, num in response.data(fields=['energy', 'sample', 'num_occurrences']):
                     rundata['energy'] = energy
                     rundata['state'] = tuple(state[key] for key in sorted(state.keys()))
                     for n in range(num):
                         self.data = self.data.append(rundata, ignore_index=True)
-            
+
             elif self.qpu == 'simulate':
                 bqm = dimod.BinaryQuadraticModel.from_ising(h=runh, J=runJ)
                 response = self.sampler.sample(bqm, num_reads=num_reads)
@@ -189,10 +264,10 @@ class DictRep(ProbRep):
         G.add_edges_from(self.couplers)
         nx.draw_networkx(G)
         return G
-    
+
     def save_data(self, filename):
-        self.data.to_csv(filename, index = False)
-    
+        self.data.to_csv(filename, index=False)
+
     def get_state_plot(self, figsize=(12, 8), filename=None, title='Distribution of Final States'):
         data = self.data
         ncount = len(data)
@@ -203,7 +278,7 @@ class DictRep(ProbRep):
         plt.xlabel('State')
 
         # Make twin axis
-        ax2=ax.twinx()
+        ax2 = ax.twinx()
 
         # Switch so count axis is on right, frequency on left
         ax2.yaxis.tick_left()
@@ -216,29 +291,29 @@ class DictRep(ProbRep):
         ax2.set_ylabel('Frequency [%]')
 
         for p in ax.patches:
-            x=p.get_bbox().get_points()[:,0]
-            y=p.get_bbox().get_points()[1,1]
-            ax.annotate('{:.1f}%'.format(100.*y/ncount), (x.mean(), y), 
-                    ha='center', va='bottom') # set the alignment of the text
+            x = p.get_bbox().get_points()[:, 0]
+            y = p.get_bbox().get_points()[1, 1]
+            ax.annotate('{:.1f}%'.format(100. * y / ncount), (x.mean(), y),
+                        ha='center', va='bottom')  # set the alignment of the text
 
         # Use a LinearLocator to ensure the correct number of ticks
         ax.yaxis.set_major_locator(ticker.LinearLocator(11))
 
         # Fix the frequency range to 0-100
-        ax2.set_ylim(0,100)
-        ax.set_ylim(0,ncount)
+        ax2.set_ylim(0, 100)
+        ax.set_ylim(0, ncount)
 
         # And use a MultipleLocator to ensure a tick spacing of 10
         ax2.yaxis.set_major_locator(ticker.MultipleLocator(10))
 
         # Need to turn the grid on ax2 off, otherwise the gridlines end up on top of the bars
-        #ax2.grid(None)
-        
+        # ax2.grid(None)
+
         if filename:
-            plt.savefig(filename, dpi = 300)
-            
+            plt.savefig(filename, dpi=300)
+
         return plt
-    
+
     def get_ferro_diagram(self, xparam, yparam, divideby=None, title=''):
         """
         Plot the probability that output states are ferromagnetic on a contour plot
@@ -254,23 +329,23 @@ class DictRep(ProbRep):
             denom = 1
             xlabel = xparam
             ylabel = yparam
-        
+
         xs = df[xparam].unique()
         ys = df[yparam].unique()
-    
+
         pfm_meshgrid = []
         # iterate over trials and obtain pFM for given xparam and yparam
         for y in ys:
             pfms = []
             for x in xs:
-                #get length of unique elements in state bitstrings
+                # get length of unique elements in state bitstrings
                 lubs = [len(set(state)) for state in df.loc[(df[yparam] == y) & (df[xparam] == x)]['state']]
                 pfms.append(lubs.count(1) / len(lubs))
             pfm_meshgrid.append(pfms)
-                
-        X, Y = np.meshgrid(xs/denom, ys/denom)
-        
-        #plot the figure
+
+        X, Y = np.meshgrid(xs / denom, ys / denom)
+
+        # plot the figure
         plt.figure()
         plt.title(title)
         plt.contourf(X, Y, pfm_meshgrid, np.arange(0, 1.2, .2), cmap='viridis', extent=(-4, 4, 0, 4))
@@ -279,7 +354,7 @@ class DictRep(ProbRep):
         plt.clim(0, 1)
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
- 
+
         return plt
 
     def sudden_anneal_test(self):
