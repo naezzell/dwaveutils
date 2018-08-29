@@ -50,6 +50,12 @@ class DictRep(ProbRep):
         """
         # poplate run information
         super().__init__(qpu, vartype, encoding)
+        
+        # create a set of regex rules to parse h/J string keys in H
+        # also creates a "rules" dictionary to relate qubit weights to relevant factor
+        self.hvrule = re.compile('h[0-9]*')
+        self.Jvrule = re.compile('J[0-9]*')
+        self.weight_rules = {}
 
         # create list of qubits/ couplers and
         # dicts that map indepndent params to
@@ -61,9 +67,27 @@ class DictRep(ProbRep):
         for key, value in H.items():
             if key[0] == key[1]:
                 self.qubits.append(key[0])
+                if type(value) != str:
+                    div_idx = -1
+                else:
+                    div_idx = value.find('/')
+                if div_idx == -1:
+                    self.weight_rules[key[0]] = 1
+                else:
+                    self.weight_rules[key[0]] = float(value[div_idx+1:])
+                    value = value[:div_idx]
                 self.params_to_qubits.setdefault(value, []).append(key[0])
             else:
                 self.couplers.append(key)
+                if type(value) != str:
+                    div_idx = -1
+                else:
+                    div_idx = value.find('/')
+                if div_idx == -1:
+                    self.weight_rules[key] = 1
+                else:
+                    self.weight_rules[key] = float(value[div_idx+1:])
+                    value = value[:div_idx]
                 self.params_to_couplers.setdefault(value, []).append(key)
 
         if qpu == 'dwave':
@@ -84,7 +108,7 @@ class DictRep(ProbRep):
             except:
                 raise ConnectionError("Cannot connect to DWave sampler. Have you created a DWave config file using 'dwave config create'?")
 
-        elif qpu == 'simulate':
+        elif qpu == 'test':
             self.sampler = dimod.SimulatedAnnealingSampler()
 
         # save values/ metadata
@@ -92,12 +116,13 @@ class DictRep(ProbRep):
         if encoding == 'direct':
             self.wqubits = self.sampler.properties['qubits']
             self.wcouplers = self.sampler.properties['couplers']
+    
 
     def save_config(self, fname, config_data={}):
         """
         Saves Hamiltonian configuration for future use
         """
-        # if config data supplied, at least dump Hamiltonian
+        # if config data not supplied, at least dump Hamiltonian
         if config_data == {}:
             config_data = {'H': self.H}
 
@@ -146,7 +171,8 @@ class DictRep(ProbRep):
                 self.couplers.append(key)
                 self.params_to_couplers.setdefault(value, []).append(key)
 
-    def populate_parameters(self, parameters, rules=None):
+
+    def populate_parameters(self, parameters):
         # generate all independent combinations of parameters
         self.params = []
         self.values = []
@@ -154,11 +180,6 @@ class DictRep(ProbRep):
             self.params.append(key)
             self.values.append(value)
         self.combos = list(itertools.product(*self.values))
-
-        # save rules for use when calling DWave
-        self.rules = rules
-        self.hvrule = re.compile('h[0-9]*')
-        self.Jvrule = re.compile('J[0-9]*')
 
         # format pandas DataFrame
         # columns = self.params[:]
@@ -211,11 +232,11 @@ class DictRep(ProbRep):
                 # if param is qubit param
                 if self.hvrule.match(param):
                     for qubit in self.params_to_qubits[param]:
-                        runh[qubit] = combo[count]
+                        runh[qubit] = combo[count]/self.weight_rules[qubit]
 
                 elif self.Jvrule.match(param):
                     for coupler in self.params_to_couplers[param]:
-                        runJ[coupler] = combo[count]
+                        runJ[coupler] = combo[count]/self.weight_rules[coupler]
 
                 elif param == 'anneal_schedule':
                     anneal_schedule = combo[count]

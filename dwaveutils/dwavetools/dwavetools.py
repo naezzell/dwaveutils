@@ -52,7 +52,7 @@ def make_numeric_schedule(discretization, **kwargs):
         sfunc = ma*t
         
     # if no pause present, anneal forward for ta to sa then quench for tq to s=1
-    elif not tq:
+    elif not tp:
         # determine slopes and y-intercept (bq) to create piece-wise function
         ma = sa / ta
         mq = (1 - sa) / tq
