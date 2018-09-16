@@ -129,67 +129,6 @@ class DictRep(ProbRep):
 
         with open(fname + ".yml", 'w') as yamloutput:
             yaml.dump(config_data, yamloutput)
-            
-        
-    def densify_unitcell(self, fqbit, hweight, Jweight):
-        '''
-        Heuristically makes the most dense connection motif within a unit
-        cell with ucsize qubits whose first (lowest #) qubit is fqbit
-        '''
-        H = {}
-        wqubits = self.wqubits
-        wcouplers = self.wcouplers
-        lqubit = fqbit + 7
-        qubits = []
-        couplings = []
-        if lqubit in wqubits:
-            qubits.append(lqubit)
-        
-        qubit = fqbit
-        # attempt to make connections between qubits in numbered order
-        while qubit < (lqubit):
-            print(qubit)
-            if qubit in wqubits:
-                qubits.append(qubit)
-                # if "left" qubit, add 4 for straight coupling
-                # otherwise, subtract 3 for diagaonal coupling
-                if ((qubit % 8) < 4):
-                    coupling = [qubit, qubit+4]
-                else:
-                    coupling = [qubit-3, qubit]
-                # try making a connection until one is found or last qubit reached
-                while (coupling[1] <= lqubit):
-                    print(coupling)
-                    if coupling in wcouplers:
-                        couplings.append(coupling)
-                        if ((qubit % 8) < 4):
-                            qubit = ((qubit+4)%8)+fqbit
-                        else:
-                            qubit = ((qubit+5)%8)+fqbit
-                        break
-                    else:
-                        if ((qubit % 8) < 4):
-                            coupling = list(map(add, coupling, [0, 1]))
-                        else:
-                            coupling = list(map(add, coupling, [1, 0]))
-                            
-                        if coupling[1] == lqubit-1:
-                            if ((qubit % 8) < 4):
-                                qubit = ((qubit+4)%8)+fqbit
-                            else:
-                                qubit = ((qubit+5)%8)+fqbit
-            else:
-                if ((qubit % 8) < 4):
-                    qubit = ((qubit+4)%8)+fqbit
-                else:
-                    qubit = ((qubit+5)%8)+fqbit
-                        
-        for qubit in qubits:
-            H[(qubit, qubit)] = hweight
-        for coupling in couplings:
-            H[tuple(coupling)] = Jweight
-                            
-        return H
         
     
     def tile_H(self):
