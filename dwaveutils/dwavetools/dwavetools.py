@@ -9,7 +9,7 @@ import qutip as qt
 import qutip.states as qts
 import qutip.operators as qto
 
-
+ 
 def make_numeric_schedule(discretization, **kwargs):
     """
     Creates an anneal_schdule to be used for numerical calculatins with QuTip. 
