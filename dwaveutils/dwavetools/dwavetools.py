@@ -33,6 +33,7 @@ def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers):
     qubit = fqbit
     # attempt to make connections between qubits in numbered order
     while qubit < (lqubit):
+        print(qubit)
         if qubit in wqubits:
             qubits.append(qubit)
             # if "left" qubit, add 4 for straight coupling
