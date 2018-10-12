@@ -9,73 +9,106 @@ import qutip as qt
 import qutip.states as qts
 import qutip.operators as qto
 from operator import add
+import networkx as nx
+from math import floor
 
-def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers):
+def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
     '''
-    Heuristically makes the most dense connection motif within a unit
-    cell with ucsize qubits whose first (lowest #) qubit is fqbit
+    Takes in the "chipdata" as a dictionary that contains working qubits and couplers and 
+    finds (if possible) the longest unbroken chain connecting q1 to q2.
     
-    Inputs
-    ------
-    fqbit: index of first qubit in unit cell
-    hweight: desired linear weight added to qubits in chain
-    Jweight: desired coupling strength between between qubits in chain
-    wqubits: list of working qubits (i.e. [0, 1, 2, ...])
-    wcopulers: list of working couplings (i.e. [[0, 1], [0, 2],...])
+    chipdata: {'wqubits': [q1, q2, ...], 'couplers' [[q1, q2], [q2, q3]...]}
+    qi: integer specifiying lowest # qubit (initial) being connected
+    R: integer specifying how many rows to chain including q1 row
+    C: interger specifying how many columns to chain including q1 column
     '''
-    H = {}
-    lqubit = fqbit + 7
-    qubits = []
-    couplings = []
-    if lqubit in wqubits:
-        qubits.append(lqubit)
+    dictH = {}
+    # pre-processing steps
+    # --------------------------
+    # for the 2000Q, the following parameters can be used
+    ucsize, rows, columns = 8, 16, 16
+    wqubits = chipdata['wqubits']
+    wcouplers = chipdata['wcouplers']
+    G = nx.Graph()
+    G.add_edges_from(wcouplers)
+    # first, check that qi is actually in the graph
+    if qi not in wqubits:
+        return("Error: qi is not in the list of working qubits for this graph.")
+    # compute initial and final unit cells
+    ui = floor(qi/ucsize)
+    uf = (ui+R*C)-1 + (columns-C)*(R-1)
+    # print out the unit cells trying to be connected for users 
+    print("Going to try and connect unit cell {} with unit cell {}".format(ui, uf))
+    # now, ensure ui and uf can, in fact, be connected
+    connections = 0
+    for q in range(uf*8, uf*8 + 7):
+        try:
+            nx.shortest_path(G, qi, q)
+            connections += 1
+            break
+        except:
+            continue
+    if connections == 0:
+        return("There are no paths that connect unit cell {} with unit cell {}.".format(ui, uf)) 
+    
+    # densely connect within unit cells and "heuristically" connect adjacent cells
+    # aka try sensical connections and ensure connected afterwards
+    for row in range(0, R):
+        # find the first and last unit cell in this column
+        uci = ui + row*columns
+        ucf = uci + (C-1)
+        # iterate to last unit cell
+        for uc in range(uci, ucf+1):
+            # find working qubits in uc
+            ucq = [q + uc*8 for q in range(8)]
+            working_ucq = [q for q in ucq if q in wqubits]
+            qi = min(working_ucq)
+            qf = max(working_ucq)
+                               
+            # create a unit cell subgraph and find longest chain by exhaustive enumeration
+            ucG = nx.Graph()
+            ucG.add_edges_from(G.subgraph(working_ucq).edges())
+            paths = nx.all_simple_paths(ucG, qi, qf)
+            node_path = max(paths, key=len)
+            dictH.update({(q, q): hval for q in node_path})
+            best_path = []
+            for i in range(len(node_path)-1):
+                best_path.append((node_path[i], node_path[i+1]))
+            dictH.update({key: Jval for key in best_path})
+            
+            # connect uc to neighbor to the right
+            used_rqubits = []
+            if uc != ucf:
+                # get the qubits that connect to the right
+                rqubits = [q for q in working_ucq if q % 8 > 3]
+                for q in rqubits:
+                    if [q, q+8] in wcouplers:
+                        dictH.update({(q, q+8): Jval, (q, q): hval})
+                        used_rqubits.append(q)
+                        
+                if not any(q in node_path for q in rqubits):
+                    return("Heuristic chaining failed. There are no inter-unit cell connections" +
+                    " between uc {} and {}".format(uc, uc+1))
+                        
+            # connect uc to neighbor down below
+            used_dqubits = []
+            if row != (R-1):
+                # get the qubits that connect down
+                dqubits = [q for q in working_ucq if q % 8 <= 3]
+                for q in dqubits:
+                    if [q, q+128] in wcouplers:
+                        dictH.update({(q, q+128): Jval, (q, q): hval})
+                        used_dqubits.append(q)
+                        
+                if not any(q in node_path for q in dqubits):
+                    return("Heuristic chaining failed. There are no inter-unit cell connections" +
+                    " between uc {} and {}".format(uc, uc+16))
+                
+    qubits_used = len([(key, value) for key, value in dictH if key == value])
+    print("Successfully created a dense chain with {} qubits.".format(qubits_used))
+            
+    return dictH
 
-    qubit = fqbit
-    # attempt to make connections between qubits in numbered order
-    while qubit < (lqubit):
-        print(qubit)
-        if qubit in wqubits:
-            qubits.append(qubit)
-            # if "left" qubit, add 4 for straight coupling
-            # otherwise, subtract 3 for diagaonal coupling
-            if ((qubit % 8) < 4):
-                coupling = [qubit, qubit+4]
-            else:
-                coupling = [qubit-3, qubit]
-            # try making a connection until one is found or last qubit reached
-            while (coupling[1] <= lqubit):
-                if coupling in wcouplers:
-                    couplings.append(coupling)
-                    if ((qubit % 8) < 4):
-                        qubit = ((qubit+4)%8)+fqbit
-                    else:
-                        qubit = ((qubit+5)%8)+fqbit
-                    break
-                else:
-                    if ((qubit % 8) < 4):
-                        coupling = list(map(add, coupling, [0, 1]))
-                    else:
-                        coupling = list(map(add, coupling, [1, 0]))
-
-                    if coupling[1] == lqubit-1:
-                        if ((qubit % 8) < 4):
-                            qubit = ((qubit+4)%8)+fqbit
-                        else:
-                            qubit = ((qubit+5)%8)+fqbit
-        else:
-            if ((qubit % 8) < 4):
-                qubit = ((qubit+4)%8)+fqbit
-            else:
-                qubit = ((qubit+5)%8)+fqbit
-
-    for qubit in qubits:
-        H[(qubit, qubit)] = hweight
-    for coupling in couplings:
-        H[tuple(coupling)] = Jweight
-
-    return H
-
- 
 def make_numeric_schedule(discretization, **kwargs):
     """
     Creates an anneal_schdule to be used for numerical calculatins with QuTip. 
@@ -98,6 +131,7 @@ def make_numeric_schedule(discretization, **kwargs):
         raise KeyError("An anneal schedule must at least include an anneal time, 'ta'")
     
     # extracts anneal parameter if present; otherwise, returns an empty string
+    direction = kwargs.get('direction', '')
     sa = kwargs.get('sa', '')
     tp = kwargs.get('tp', '')
     tq = kwargs.get('tq', '')
@@ -105,52 +139,91 @@ def make_numeric_schedule(discretization, **kwargs):
     # turn discretization into samplerate multiplier
     samplerate = 1 / discretization
     
-    # if no sa present, create a standard forward anneal for ta seconds
-    if not sa:
-        # determine slope of anneal
-        sa = 1; ta = kwargs['ta'];
-        ma = sa / ta
-        
-        # create a list of times with (ta+1)*samplerate elements
-        t = np.linspace(0, ta, int((ta+1)*samplerate))
-        
-        # create linear s(t) function
-        sfunc = ma*t
-        
-    # if no pause present, anneal forward for ta to sa then quench for tq to s=1
-    elif not tp:
-        # determine slopes and y-intercept (bq) to create piece-wise function
-        ma = sa / ta
-        mq = (1 - sa) / tq
-        bq = (sa*(ta + tq) - ta)/tq
-        
-        # create a list of times where sampling for anneal/ quench proportional to time there
-        t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
-                                np.linspace(ta+.00001, ta+tq, int((ta+tq+1)*samplerate))))
-        
-        # create a piece-wise-linear (PWL) s(t) function defined over t values
-        sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
-                            [lambda t: ma*t, lambda t: bq + mq*t])
-        
-    # otherwise, forward anneal, pause, then quench
-    else:
-        # determine slopes and y-intercept (bq) to create piece-wise function 
-        ma = sa / ta
-        mp = 0
-        mq = (1 - sa) / tq
-        bq = (sa*(ta + tp + tq) - (ta + tp))/tq
-        
-        # create a list of times with samplerate elements from 0 and T = ta + tp + tq
-        t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
-                                np.linspace(ta+.00001, ta+tp, int((ta+tp+1)*samplerate)),
-                                np.linspace(ta+tp+.00001, ta+tp+tq, int((ta+tp+tq+1)*samplerate))))
-        
-        # create a piece-wise-linear (PWL) s(t) function defined over t values
-        sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
-                             [lambda t: ma*t, lambda t: sa, lambda t: bq + mq*t])
+    if direction == 'forward' or direction == '':
+    
+        # if no sa present, create a standard forward anneal for ta seconds
+        if not sa:
+            # determine slope of anneal
+            sa = 1; ta = kwargs['ta'];
+            ma = sa / ta
+
+            # create a list of times with (ta+1)*samplerate elements
+            t = np.linspace(0, ta, int((ta+1)*samplerate))
+
+            # create linear s(t) function
+            sfunc = ma*t
+
+        # if no pause present, anneal forward for ta to sa then quench for tq to s=1
+        elif not tp:
+            # determine slopes and y-intercept (bq) to create piece-wise function
+            ma = sa / ta
+            mq = (1 - sa) / tq
+            bq = (sa*(ta + tq) - ta)/tq
+
+            # create a list of times where sampling for anneal/ quench proportional to time there
+            t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
+                                    np.linspace(ta+.00001, ta+tq, int((ta+tq+1)*samplerate))))
+
+            # create a piece-wise-linear (PWL) s(t) function defined over t values
+            sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
+                                [lambda t: ma*t, lambda t: bq + mq*t])
+
+        # otherwise, forward anneal, pause, then quench
+        else:
+            # determine slopes and y-intercept (bq) to create piece-wise function 
+            ma = sa / ta
+            mp = 0
+            mq = (1 - sa) / tq
+            bq = (sa*(ta + tp + tq) - (ta + tp))/tq
+
+            # create a list of times with samplerate elements from 0 and T = ta + tp + tq
+            t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
+                                    np.linspace(ta+.00001, ta+tp, int((ta+tp+1)*samplerate)),
+                                    np.linspace(ta+tp+.00001, ta+tp+tq, int((ta+tp+tq+1)*samplerate))))
+
+            # create a piece-wise-linear (PWL) s(t) function defined over t values
+            sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
+                                 [lambda t: ma*t, lambda t: sa, lambda t: bq + mq*t])
+            
+    elif direction == 'reverse':
+        # if no pause, do standard 'reverse' anneal
+        if not tp:
+            # determine slopes and y-intercept (bq) to create piece-wise function
+            ma = (sa - 1) / ta
+            ba = 1
+            mq = (1 - sa) / tq
+            bq = (sa*(ta + tq) - ta)/tq
+
+            # create a list of times where sampling for anneal/ quench proportional to time there
+            t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
+                                    np.linspace(ta+.00001, ta+tq, int((ta+tq+1)*samplerate))))
+
+            # create a piece-wise-linear (PWL) s(t) function defined over t values
+            sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
+                                [lambda t: ba + ma*t, lambda t: bq + mq*t])
+            
+        # otherwise, include pause
+        else:
+            # determine slopes and y-intercept (bq) to create piece-wise function 
+            ma = (sa - 1) / ta
+            ba = 1
+            mp = 0
+            mq = (1 - sa) / tq
+            bq = (sa*(ta + tp + tq) - (ta + tp))/tq
+
+            # create a list of times with samplerate elements from 0 and T = ta + tp + tq
+            t = reduce(np.union1d, (np.linspace(0, ta, int((ta+1)*samplerate)),
+                                    np.linspace(ta+.00001, ta+tp, int((ta+tp+1)*samplerate)),
+                                    np.linspace(ta+tp+.00001, ta+tp+tq, int((ta+tp+tq+1)*samplerate))))
+
+            # create a piece-wise-linear (PWL) s(t) function defined over t values
+            sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
+                                 [lambda t:ba + ma*t, lambda t: sa, lambda t: bq + mq*t])
+            
         
         
     return [t, sfunc]
+
 
 def nqubit_1pauli(pauli, i, n):
     """
