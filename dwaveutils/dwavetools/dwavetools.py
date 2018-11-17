@@ -4,6 +4,7 @@ from functools import reduce
 from dwave.system.samplers import DWaveSampler
 import itertools
 from collections import OrderedDict
+from scipy.stats import entropy as entropy
 import pandas as pd
 import qutip as qt
 import qutip.states as qts
@@ -11,6 +12,150 @@ import qutip.operators as qto
 from operator import add
 import networkx as nx
 from math import floor
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import seaborn as sns
+import random
+
+def get_state_plot(data, figsize=(12, 8), filename=None, title='Distribution of Final States'):
+    ncount = len(data)
+
+    plt.figure(figsize=figsize)
+    ax = sns.countplot(x='states', data=data)
+    plt.title(title)
+    plt.xlabel('State')
+
+    # Make twin axis
+    ax2 = ax.twinx()
+
+    # Switch so count axis is on right, frequency on left
+    ax2.yaxis.tick_left()
+    ax.yaxis.tick_right()
+
+    # Also switch the labels over
+    ax.yaxis.set_label_position('right')
+    ax2.yaxis.set_label_position('left')
+
+    ax2.set_ylabel('Frequency [%]')
+
+    for p in ax.patches:
+        x = p.get_bbox().get_points()[:, 0]
+        y = p.get_bbox().get_points()[1, 1]
+        ax.annotate('{:.1f}%'.format(100. * y / ncount), (x.mean(), y),
+                    ha='center', va='bottom')  # set the alignment of the text
+
+    # Use a LinearLocator to ensure the correct number of ticks
+    ax.yaxis.set_major_locator(ticker.LinearLocator(11))
+
+    # Fix the frequency range to 0-100
+    ax2.set_ylim(0, 100)
+    ax.set_ylim(0, ncount)
+
+    # And use a MultipleLocator to ensure a tick spacing of 10
+    ax2.yaxis.set_major_locator(ticker.MultipleLocator(10))
+
+    # Need to turn the grid on ax2 off, otherwise the gridlines end up on top of the bars
+    # ax2.grid(None)
+
+    if filename:
+        plt.savefig(filename, dpi=300)
+
+    return plt
+
+def KL_div(diag, others):
+    """
+    Compares the Kullback Liebler divergence of different probability density
+    functions w.r.t. direct diagonlization. 
+    
+    Inputs
+    -------------------------------------------------------------------------------
+    diag: list of probs of each state obtained via direct diagonlization of final H
+    others: dict of the form {'name': probs}
+    
+    Outputs
+    -------------------------------------------------------------------------------
+    KL_div = {'name': KL value}
+    """
+    
+    return {name: entropy(diag, others[name]).flatten() for name in others}
+
+def random_partition(dictrep_H):
+    """
+    Creates a random partition of the H from 1 to n-1 qubits.
+    
+    Input
+    ---------------------------------------------------------
+    dictrep_H: a Hamiltonian represented in the dictrep class
+    
+    Output
+    ---------------------------------------------------------
+    Returns a dictionary with the following elements: 
+    *dictHR: random partition of H (paritions qubits and THEN
+    looks at random set of couplers that involve these qubits)
+    
+    *Rqubits: qubits that 'belog' to HR partition
+    
+    *dictHF: the complement of dictHR w.r.t. H
+    
+    Note: not very efficient implementation, but I don't want to
+    perform random choice of qubits and couplers at the same time, 
+    as this leads to issues of getting random HR couplings between
+    only HF qubits...
+    """
+    H = dictrep_H.H
+    Hgraph = dictrep_H.graph
+    qubit_list = dictrep_H.qubits
+    nqubits = dictrep_H.nqubits
+    
+    # find HR, a random partition of H
+    rand_int = random.randint(1, nqubits-1)
+    rand_qubits = random.sample(qubit_list, rand_int)
+    dictHR = {}
+    for qubit in rand_qubits:
+        dictHR.update({(qubit, qubit): H[(qubit, qubit)]})
+        neighbors = list(Hgraph.neighbors(qubit))
+        rand_int = random.randint(1, len(neighbors))
+        rand_neighbors = random.sample(neighbors, rand_int)
+        for rn in rand_neighbors:
+            rand_coupler = tuple(sorted((qubit, rn)))
+            #dictHR.update({rand_coupler: H[rand_coupler]})
+            dictHR[rand_coupler] = H[rand_coupler]
+           
+    # create the complementary dictionary of dictHR
+    dictHF = {}
+    for key, value in H.items():
+        if key not in dictHR:
+            dictHF[key] = value
+            if key[0] == key[1]:
+                dictHR[key] = 0
+        else:
+            if key[0] == key[1]:
+                dictHF[key] = 0
+
+    return {'HR': dictHR, 'Rqubits': rand_qubits, 'HF': dictHF}
+
+def gs_calculator(H, etol=1e-8, stol=1e-12):
+    """
+    Computes the (possibly degenerate) ground state of an input
+    Hamiltonian H. 
+    
+    H: a QuTIP defined Hamitltonian
+    gs: ground-state in QuTIP style
+    """
+    energies, states = H.eigenstates()
+    degeneracy = 1
+    lowest_E = energies[0]
+    for n in range(1,len(energies)):
+        if abs(energies[n]-lowest_E) < etol:
+            degeneracy += 1
+            
+    gs = states[0]
+    for n in range(1, degeneracy):
+        gs = gs + states[n]
+    gs = gs.tidyup(stol)
+    gs = gs.unit()
+    
+    return gs
 
 def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
     '''
