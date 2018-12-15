@@ -17,6 +17,45 @@ import matplotlib.ticker as ticker
 import seaborn as sns
 import random
 
+def ml_measurement(probs, num_qubits, qubits=None):
+    """
+    Finds the most likely measurement outcome predicted from discrete probability
+    distribution of n-qubits. (Relies on probs being canonicaly tensor product ordering).
+
+    Inputs
+    ---------------------------------------------------------------------
+    probs: list of probability amplitudes for each composite qubit state
+
+    Output
+    ---------------------------------------------------------------------
+    ml_state: reconstructed most likely state as a string
+    """
+    state = []
+
+    # gets the most likely state
+    max_idx = np.argmax(probs)
+
+    # finds the correct state of each qubit with a tensor product ordering assumption
+    for n in range(num_qubits):
+        power = num_qubits - n
+        mod = 2**power
+        cut_off = mod / 2
+        if (max_idx) % mod >= cut_off:
+            state.append(1)
+        else:
+            state.append(0)
+
+    # returns only the qubits of interest if a subset of qubits is specified
+    sub_system_state = []
+    if qubits:
+        for (idx, qs) in enumerate(state):
+            if idx in qubits:
+                sub_system_state.append(qs)
+        state = sub_system_state
+
+    return state
+
+
 def get_state_plot(data, figsize=(12, 8), filename=None, title='Distribution of Final States'):
     ncount = len(data)
 
@@ -65,40 +104,40 @@ def get_state_plot(data, figsize=(12, 8), filename=None, title='Distribution of 
 def KL_div(diag, others):
     """
     Compares the Kullback Liebler divergence of different probability density
-    functions w.r.t. direct diagonlization. 
-    
+    functions w.r.t. direct diagonlization.
+
     Inputs
     -------------------------------------------------------------------------------
     diag: list of probs of each state obtained via direct diagonlization of final H
     others: dict of the form {'name': probs}
-    
+
     Outputs
     -------------------------------------------------------------------------------
     KL_div = {'name': KL value}
     """
-    
+
     return {name: entropy(diag, others[name]).flatten() for name in others}
 
 def random_partition(dictrep_H):
     """
     Creates a random partition of the H from 1 to n-1 qubits.
-    
+
     Input
     ---------------------------------------------------------
     dictrep_H: a Hamiltonian represented in the dictrep class
-    
+
     Output
     ---------------------------------------------------------
-    Returns a dictionary with the following elements: 
+    Returns a dictionary with the following elements:
     *dictHR: random partition of H (paritions qubits and THEN
     looks at random set of couplers that involve these qubits)
-    
+
     *Rqubits: qubits that 'belog' to HR partition
-    
+
     *dictHF: the complement of dictHR w.r.t. H
-    
+
     Note: not very efficient implementation, but I don't want to
-    perform random choice of qubits and couplers at the same time, 
+    perform random choice of qubits and couplers at the same time,
     as this leads to issues of getting random HR couplings between
     only HF qubits...
     """
@@ -106,7 +145,7 @@ def random_partition(dictrep_H):
     Hgraph = dictrep_H.graph
     qubit_list = dictrep_H.qubits
     nqubits = dictrep_H.nqubits
-    
+
     # find HR, a random partition of H
     rand_int = random.randint(1, nqubits-1)
     rand_qubits = random.sample(qubit_list, rand_int)
@@ -120,7 +159,7 @@ def random_partition(dictrep_H):
             rand_coupler = tuple(sorted((qubit, rn)))
             #dictHR.update({rand_coupler: H[rand_coupler]})
             dictHR[rand_coupler] = H[rand_coupler]
-           
+
     # create the complementary dictionary of dictHR
     dictHF = {}
     for key, value in H.items():
@@ -137,8 +176,8 @@ def random_partition(dictrep_H):
 def gs_calculator(H, etol=1e-8, stol=1e-12):
     """
     Computes the (possibly degenerate) ground state of an input
-    Hamiltonian H. 
-    
+    Hamiltonian H.
+
     H: a QuTIP defined Hamitltonian
     gs: ground-state in QuTIP style
     """
@@ -148,20 +187,20 @@ def gs_calculator(H, etol=1e-8, stol=1e-12):
     for n in range(1,len(energies)):
         if abs(energies[n]-lowest_E) < etol:
             degeneracy += 1
-            
+
     gs = states[0]
     for n in range(1, degeneracy):
         gs = gs + states[n]
     gs = gs.tidyup(stol)
     gs = gs.unit()
-    
+
     return gs
 
 def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
     '''
-    Takes in the "chipdata" as a dictionary that contains working qubits and couplers and 
+    Takes in the "chipdata" as a dictionary that contains working qubits and couplers and
     finds (if possible) the longest unbroken chain connecting q1 to q2.
-    
+
     chipdata: {'wqubits': [q1, q2, ...], 'couplers' [[q1, q2], [q2, q3]...]}
     qi: integer specifiying lowest # qubit (initial) being connected
     R: integer specifying how many rows to chain including q1 row
@@ -182,7 +221,7 @@ def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
     # compute initial and final unit cells
     ui = floor(qi/ucsize)
     uf = (ui+R*C)-1 + (columns-C)*(R-1)
-    # print out the unit cells trying to be connected for users 
+    # print out the unit cells trying to be connected for users
     print("Going to try and connect unit cell {} with unit cell {}".format(ui, uf))
     # now, ensure ui and uf can, in fact, be connected
     connections = 0
@@ -194,8 +233,8 @@ def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
         except:
             continue
     if connections == 0:
-        return("There are no paths that connect unit cell {} with unit cell {}.".format(ui, uf)) 
-    
+        return("There are no paths that connect unit cell {} with unit cell {}.".format(ui, uf))
+
     # densely connect within unit cells and "heuristically" connect adjacent cells
     # aka try sensical connections and ensure connected afterwards
     for row in range(0, R):
@@ -209,7 +248,7 @@ def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
             working_ucq = [q for q in ucq if q in wqubits]
             qi = min(working_ucq)
             qf = max(working_ucq)
-                               
+
             # create a unit cell subgraph and find longest chain by exhaustive enumeration
             ucG = nx.Graph()
             ucG.add_edges_from(G.subgraph(working_ucq).edges())
@@ -220,7 +259,7 @@ def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
             for i in range(len(node_path)-1):
                 best_path.append((node_path[i], node_path[i+1]))
             dictH.update({key: Jval for key in best_path})
-            
+
             # connect uc to neighbor to the right
             used_rqubits = []
             if uc != ucf:
@@ -230,11 +269,11 @@ def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
                     if [q, q+8] in wcouplers:
                         dictH.update({(q, q+8): Jval, (q, q): hval})
                         used_rqubits.append(q)
-                        
+
                 if not any(q in node_path for q in rqubits):
                     return("Heuristic chaining failed. There are no inter-unit cell connections" +
                     " between uc {} and {}".format(uc, uc+1))
-                        
+
             # connect uc to neighbor down below
             used_dqubits = []
             if row != (R-1):
@@ -244,27 +283,27 @@ def dense_connect_2000Q(chipdata, qi, R, C, hval, Jval):
                     if [q, q+128] in wcouplers:
                         dictH.update({(q, q+128): Jval, (q, q): hval})
                         used_dqubits.append(q)
-                        
+
                 if not any(q in node_path for q in dqubits):
                     return("Heuristic chaining failed. There are no inter-unit cell connections" +
                     " between uc {} and {}".format(uc, uc+16))
-                
+
     qubits_used = len([(key, value) for key, value in dictH if key == value])
     print("Successfully created a dense chain with {} qubits.".format(qubits_used))
-            
+
     return dictH
 
 def make_numeric_schedule(discretization, **kwargs):
     """
-    Creates an anneal_schdule to be used for numerical calculatins with QuTip. 
+    Creates an anneal_schdule to be used for numerical calculatins with QuTip.
     Returns times and svals associated with each time that [times, svals]
     that together define an anneal schedule.
-    
-    Inputs: 
+
+    Inputs:
     discretization: determines what step size to use between points
     kwargs: dictionary that contains optional key-value args
     optional args: sa, ta, tp, tq
-        sa: s value to anneal to 
+        sa: s value to anneal to
         ta: time it takes to anneal to sa
         tp: time to pause after reaching sa
         tq: time to quench from sa to s = 1
@@ -274,18 +313,18 @@ def make_numeric_schedule(discretization, **kwargs):
         ta = kwargs['ta']
     except KeyError:
         raise KeyError("An anneal schedule must at least include an anneal time, 'ta'")
-    
+
     # extracts anneal parameter if present; otherwise, returns an empty string
     direction = kwargs.get('direction', '')
     sa = kwargs.get('sa', '')
     tp = kwargs.get('tp', '')
     tq = kwargs.get('tq', '')
-    
+
     # turn discretization into samplerate multiplier
     samplerate = 1 / discretization
-    
+
     if direction == 'forward' or direction == '':
-    
+
         # if no sa present, create a standard forward anneal for ta seconds
         if not sa:
             # determine slope of anneal
@@ -315,7 +354,7 @@ def make_numeric_schedule(discretization, **kwargs):
 
         # otherwise, forward anneal, pause, then quench
         else:
-            # determine slopes and y-intercept (bq) to create piece-wise function 
+            # determine slopes and y-intercept (bq) to create piece-wise function
             ma = sa / ta
             mp = 0
             mq = (1 - sa) / tq
@@ -329,7 +368,7 @@ def make_numeric_schedule(discretization, **kwargs):
             # create a piece-wise-linear (PWL) s(t) function defined over t values
             sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
                                  [lambda t: ma*t, lambda t: sa, lambda t: bq + mq*t])
-            
+
     elif direction == 'reverse':
         # if no pause, do standard 'reverse' anneal
         if not tp:
@@ -346,10 +385,10 @@ def make_numeric_schedule(discretization, **kwargs):
             # create a piece-wise-linear (PWL) s(t) function defined over t values
             sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tq)],
                                 [lambda t: ba + ma*t, lambda t: bq + mq*t])
-            
+
         # otherwise, include pause
         else:
-            # determine slopes and y-intercept (bq) to create piece-wise function 
+            # determine slopes and y-intercept (bq) to create piece-wise function
             ma = (sa - 1) / ta
             ba = 1
             mp = 0
@@ -364,9 +403,9 @@ def make_numeric_schedule(discretization, **kwargs):
             # create a piece-wise-linear (PWL) s(t) function defined over t values
             sfunc = np.piecewise(t, [t <= ta, (ta < t) & (t <= ta+tp),(ta+tp < t) & (t <= ta+tp+tq)],
                                  [lambda t:ba + ma*t, lambda t: sa, lambda t: bq + mq*t])
-            
-        
-        
+
+
+
     return [t, sfunc]
 
 
@@ -374,55 +413,55 @@ def nqubit_1pauli(pauli, i, n):
     """
     Creates a single-qubit pauli operator on qubit i (0-based)
     that acts on n qubits. (padded with identities).
-    
+
     For example, pauli = Z, i = 1 and n = 3 gives:
     Z x I x I, an 8 x 8 matrix
-    """ 
+    """
     #create identity padding
     iden1 = [qto.identity(2) for j in range(i)]
     iden2 = [qto.identity(2) for j in range(n-i-1)]
-    
+
     #combine into total operator list that is in proper order
     oplist = iden1 + [pauli] + iden2
-    
+
     #create final operator by using tensor product on unpacked operator list
     operator = qt.tensor(*oplist)
-    
+
     return operator
 
 def nqubit_2pauli(ipauli, jpauli, i, j, n):
     """
     Creates a 2 qubit x/y/z pauli operator on qubits i,j
     with i < j that acts on n qubits in total.
-    
+
     For example, ipauli = Y, jpauli = Z, i = 1, j = 2 and n = 3 gives:
     Y x Z x I, an 8 x 8 matrix
-    """ 
+    """
     #create identity padding
     iden1 = [qto.identity(2) for m in range(i)]
     iden2 = [qto.identity(2) for m in range(j-i-1)]
     iden3 = [qto.identity(2) for m in range(n-j-1)]
-    
+
     #combine into total operator list
     oplist = iden1 + [ipauli] + iden2 + [jpauli] + iden3
-    
+
     # apply tensor product on unpacked oplist
     operator = qt.tensor(*oplist)
-    
+
     return operator
 
 def dict_to_qutip(dictrep, encoded_params=None):
     """
     Takes a DictRep Ising Hamiltonian and converts it to a QuTip Ising Hamiltonian.
-    Encoded params must be passed if dictrep weights are variables (abstract) and 
-    not actual numbers. 
+    Encoded params must be passed if dictrep weights are variables (abstract) and
+    not actual numbers.
     """
     # make useful operators
     sigmaz = qto.sigmaz()
     nqbits = len(dictrep.qubits)
     zeros = [qto.qzero(2) for m in range(nqbits)]
     finalH = qt.tensor(*zeros)
-    
+
     for key, value in dictrep.H.items():
         if key[0] == key[1]:
             if encoded_params:
@@ -434,66 +473,66 @@ def dict_to_qutip(dictrep, encoded_params=None):
                 finalH += encoded_params[value]*nqubit_2pauli(sigmaz, sigmaz, key[0], key[1], nqbits)
             else:
                 finalH += value*nqubit_2pauli(sigmaz, sigmaz, key[0], key[1], nqbits)
-            
+
     return finalH
 
 def time_interpolation(schedule, processor_data):
     """
-    Interpolates the A(s) and B(s) functions in terms of time in accordance with an 
-    annealing schedule s(t). Returns cubic-splines amenable to use with QuTip. 
+    Interpolates the A(s) and B(s) functions in terms of time in accordance with an
+    annealing schedule s(t). Returns cubic-splines amenable to use with QuTip.
     """
-    
+
     svals = processor_data['svals']
     Avals = processor_data['Avals']
     Bvals = processor_data['Bvals']
-    
+
     # interpolate Avals and Bvals into a cubic spline function
     Afunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], Avals)
     Bfunc = qt.interpolate.Cubic_Spline(svals[0], svals[-1], Bvals)
-        
+
     # now, extract s(t)
     times = schedule[0]
     sprogression = schedule[1]
-    
+
     # interpolate A/B funcs with respect to time with s(t) relationship implicitly carried through
     sch_Afunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Afunc(sprogression))
     sch_Bfunc = qt.interpolate.Cubic_Spline(times[0], times[-1], Bfunc(sprogression))
-    
+
     sch_ABfuncs = {'A(t)': sch_Afunc, 'B(t)': sch_Bfunc}
-    
+
     return sch_ABfuncs
 
 def loadAandB(file="processor_annealing_schedule_DW_2000Q_2_June2018.csv"):
     """
     Loads in A(s) and B(s) data from chip and interpolates using QuTip's
     cubic-spline function. Useful for numerical simulations.
-    
+
     Returns (as list in this order):
     svals: numpy array of discrete s values for which A(s)/B(s) are defined
     Afunc: interpolated A(s) function
     Bfunc: interpolated B(s) function
     """
-    
+
     Hdata = pd.read_csv(file)
     # pd as in pandas Series form of data
     pdA = Hdata['A(s) (GHz)']
     pdB = Hdata['B(s) (GHz)']
-    pds = Hdata['s'] 
+    pds = Hdata['s']
     Avals = np.array(pdA)
     Bvals = np.array(pdB)
     svals = np.array(pds)
-    
+
     processor_data = {'svals': svals, 'Avals': Avals, 'Bvals': Bvals}
-    
+
     return processor_data
 
 def get_numeric_H(dictrep):
     HZ = dict_to_qutip(dictrep)
     nqbits = len(dictrep.qubits)
     HX = sum([nqubit_1pauli(qto.sigmax(), m, nqbits) for m in range(nqbits)])
-    
+
     H = {'HZ': HZ, 'HX': HX}
-    
+
     return H
 
 
@@ -524,10 +563,10 @@ def create_heff_csv(chipdataf, newfile):
     Avals = chipschedule['A(s) (GHz)']
     Bvals = chipschedule['B(s) (GHz)']
     heffs = np.array(Avals / Bvals)
-    
+
     df = pd.DataFrame({'heff': heffs, 's': svals})
     df.to_csv(newfile, index=False)
-    
+
     return "Great Success."
 
 
@@ -561,20 +600,20 @@ def make_dwave_schedule(direction, s, ta, tp=0, tq=0):
     #make sure s is valid
     if s > 1.0:
         raise ValueError("s cannot exceed 1.")
-    
-    #if s = 1, stop the anneal after ta micro seconds 
+
+    #if s = 1, stop the anneal after ta micro seconds
     elif s == 1:
         return [[0, 0], [ta, 1]]
-    
+
     #otherwise, create anneal schedule according to times/ s
     if direction.lower()[0] == 'f':
         sch = [[0, 0], [ta, s], [ta+tp, s], [ta+tp+tq, 1]]
     elif direction.lower()[0] == 'r':
         sch = [[0, 1], [ta, s], [ta+tp, s], [ta+tp+tq, 1]]
-    
+
     #remove duplicates while preserving order (for example if tp = 0)
     ann_sch = list(map(list, OrderedDict.fromkeys(map(tuple, sch))))
-    
+
     return ann_sch
 
 
