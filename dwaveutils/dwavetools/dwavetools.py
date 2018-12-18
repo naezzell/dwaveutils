@@ -17,6 +17,71 @@ import matplotlib.ticker as ticker
 import seaborn as sns
 import random
 
+def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers):
+    '''
+    Heuristically makes the most dense connection motif within a unit
+    cell with ucsize qubits whose first (lowest #) qubit is fqbit
+    
+    Inputs
+    ------
+    fqbit: index of first qubit in unit cell
+    hweight: desired linear weight added to qubits in chain
+    Jweight: desired coupling strength between between qubits in chain
+    wqubits: list of working qubits (i.e. [0, 1, 2, ...])
+    wcopulers: list of working couplings (i.e. [[0, 1], [0, 2],...])
+    '''
+    H = {}
+    lqubit = fqbit + 7
+    qubits = []
+    couplings = []
+    if lqubit in wqubits:
+        qubits.append(lqubit)
+
+    qubit = fqbit
+    # attempt to make connections between qubits in numbered order
+    while qubit < (lqubit):
+        print(qubit)
+        if qubit in wqubits:
+            qubits.append(qubit)
+            # if "left" qubit, add 4 for straight coupling
+            # otherwise, subtract 3 for diagaonal coupling
+            if ((qubit % 8) < 4):
+                coupling = [qubit, qubit+4]
+            else:
+                coupling = [qubit-3, qubit]
+            # try making a connection until one is found or last qubit reached
+            while (coupling[1] <= lqubit):
+                if coupling in wcouplers:
+                    couplings.append(coupling)
+                    if ((qubit % 8) < 4):
+                        qubit = ((qubit+4)%8)+fqbit
+                    else:
+                        qubit = ((qubit+5)%8)+fqbit
+                    break
+                else:
+                    if ((qubit % 8) < 4):
+                        coupling = list(map(add, coupling, [0, 1]))
+                    else:
+                        coupling = list(map(add, coupling, [1, 0]))
+
+                    if coupling[1] == lqubit-1:
+                        if ((qubit % 8) < 4):
+                            qubit = ((qubit+4)%8)+fqbit
+                        else:
+                            qubit = ((qubit+5)%8)+fqbit
+        else:
+            if ((qubit % 8) < 4):
+                qubit = ((qubit+4)%8)+fqbit
+            else:
+                qubit = ((qubit+5)%8)+fqbit
+
+    for qubit in qubits:
+        H[(qubit, qubit)] = hweight
+    for coupling in couplings:
+        H[tuple(coupling)] = Jweight
+
+    return H
+
 def ml_measurement(probs, num_qubits, qubits=None):
     """
     Finds the most likely measurement outcome predicted from discrete probability
