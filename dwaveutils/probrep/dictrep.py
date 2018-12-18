@@ -25,6 +25,16 @@ import yaml
 import json
 import copy
 from operator import add
+import random
+
+# QuTip libraries + support for this
+import qutip as qt
+import qutip.states as qts
+import qutip.operators as qto
+from scipy.stats import entropy as entropy
+from dwavetools import (nqubit_1pauli, nqubit_2pauli, loadAandB, dict_to_qutip,
+                       make_numeric_schedule, get_numeric_H, time_interpolation,
+                       gs_calculator, random_partition, ml_measurement, KL_div)
 
 
 class DictRep(ProbRep):
@@ -51,7 +61,7 @@ class DictRep(ProbRep):
         """
         # poplate run information
         super().__init__(qpu, vartype, encoding)
-        
+
         # create a set of regex rules to parse h/J string keys in H
         # also creates a "rules" dictionary to relate qubit weights to relevant factor
         self.hvrule = re.compile('h[0-9]*')
@@ -61,6 +71,7 @@ class DictRep(ProbRep):
         # create list of qubits/ couplers and
         # dicts that map indepndent params to
         # all qubits/ couplers that have that value
+        self.H = H
         self.qubits = []
         self.params_to_qubits = {}
         self.couplers = []
@@ -91,6 +102,9 @@ class DictRep(ProbRep):
                     value = value[:div_idx]
                 self.params_to_couplers.setdefault(value, []).append(key)
 
+        self.nqubits = len(self.qubits)
+        self.Hsize = 2**(self.nqubits)
+
         if qpu == 'dwave':
             try:
                 # let OCEAN handle embedding
@@ -112,12 +126,18 @@ class DictRep(ProbRep):
         elif qpu == 'test':
             self.sampler = dimod.SimulatedAnnealingSampler()
 
+        elif qpu == 'numerical':
+            self.processordata = loadAandB()
+            self.graph = nx.Graph()
+            self.graph.add_edges_from(self.couplers)
+            self.data = pd.DataFrame()
+
         # save values/ metadata
         self.H = copy.deepcopy(H)
         if encoding == 'direct':
             self.wqubits = self.sampler.properties['qubits']
             self.wcouplers = self.sampler.properties['couplers']
-    
+
 
     def save_config(self, fname, config_data={}):
         """
@@ -129,8 +149,8 @@ class DictRep(ProbRep):
 
         with open(fname + ".yml", 'w') as yamloutput:
             yaml.dump(config_data, yamloutput)
-        
-    
+
+
     def tile_H(self):
         pqubits = self.qubits
         pcouplers = self.couplers
@@ -273,13 +293,16 @@ class DictRep(ProbRep):
                     for n in range(num):
                         self.data = self.data.append(rundata, ignore_index=True)
 
-            elif self.qpu == 'simulate':
+            elif self.qpu == 'test':
                 bqm = dimod.BinaryQuadraticModel.from_ising(h=runh, J=runJ)
                 response = self.sampler.sample(bqm, num_reads=num_reads)
                 for energy, state in response.data(fields=['energy', 'sample']):
                     rundata['energy'] = energy
                     rundata['state'] = tuple(state[key] for key in sorted(state.keys()))
                     self.data = self.data.append(rundata, ignore_index=True)
+
+            elif self.qpu == 'numerical':
+                continue
 
         return self.data
 
@@ -380,6 +403,220 @@ class DictRep(ProbRep):
         plt.ylabel(ylabel)
 
         return plt
+
+    def diag_H(self):
+        """
+        Returns probability of each state.
+        """
+        numericH = get_numeric_H(self)
+        HZ = numericH['HZ']
+        gs = gs_calculator(HZ)
+        num_qubits = len(self.qubits)
+        Hsize = 2**(num_qubits)
+        probs = np.array([abs(gs[i].flatten()[0])**2 for i in range(Hsize)])
+
+        return probs
+
+    def nf_anneal(self, schedule):
+        """
+        Performs a numeric forward anneal on H using QuTip.
+
+        inputs:
+        ---------
+        schedule - a numeric anneal schedule defined with anneal length
+
+        outputs:
+        ---------
+        probs - probability of each output state as a list ordered in canconically w.r.t. tensor product
+        """
+        times, svals = schedule
+
+        # create a numeric representation of H
+        ABfuncs = time_interpolation(schedule, self.processordata)
+        numericH = get_numeric_H(self)
+        A = ABfuncs['A(t)']
+        B = ABfuncs['B(t)']
+        HX = numericH['HX']
+        HZ = numericH['HZ']
+        # "Analytic" or function H(t)
+        analH = lambda t : A(t)*HX + B(t)*HZ
+        # Define list_H for QuTiP
+        listH = [[HX, A], [HZ, B]]
+
+        # perform a numerical forward anneal on H
+        results = qt.sesolve(listH, gs_calculator(analH(0)), times)
+        probs = np.array([abs(results.states[-1][i].flatten()[0])**2 for i in range(self.Hsize)])
+
+        return probs
+
+    def nr_anneal(self, schedule, init_state):
+        """
+        Performs a numeric reverse anneal on H using QuTip.
+
+        inputs:
+        ---------
+        schedule - a numeric anneal schedule
+        init_state - the starting state for the reverse anneal listed as string or list
+        e.g. '111' or [010]
+
+        outputs:
+        ---------
+        probs - probability of each output state as a list ordered in canconically w.r.t. tensor product
+        """
+        times, svals = schedule
+
+        # create a numeric representation of H
+        ABfuncs = time_interpolation(schedule, self.processordata)
+        numericH = get_numeric_H(self)
+        A = ABfuncs['A(t)']
+        B = ABfuncs['B(t)']
+        HX = numericH['HX']
+        HZ = numericH['HZ']
+        # Define list_H for QuTiP
+        listH = [[HX, A], [HZ, B]]
+
+        # create a valid QuTip initial state
+        qubit_states = [qts.ket([int(i)]) for i in init_state]
+        QuTip_init_state = qt.tensor(*qubit_states)
+
+        # perform a numerical reverse anneal on H
+        results = qt.sesolve(listH, QuTip_init_state, times)
+        probs = np.array([abs(results.states[-1][i].flatten()[0])**2 for i in range(self.Hsize)])
+
+        return probs
+
+    def frem_anneal(self, schedules, partition, HR_init_state):
+        """
+        Performs a numeric FREM anneal on H using QuTip.
+
+        inputs:
+        ---------
+        schedules - a numeric annealing schedules [reverse, forward]
+        partition - a parition of H in the form [HR, HF]
+        init_state - the starting state for the reverse anneal listed as string or list
+        e.g. '111' or [010]
+
+        outputs:
+        ---------
+        probs - probability of each output state as a list ordered in canconically w.r.t. tensor product
+        """
+
+        # retrieve useful quantities from input data
+        f_sch, r_sch = schedules
+        times = f_sch[0]
+        HR = DictRep(H = partition['HR'], qpu = 'numerical', vartype = 'ising', encoding = 'logical')
+        HF = DictRep(H = partition['HF'], qpu = 'numerical', vartype = 'ising', encoding = 'logical')
+        Rqubits = partition['Rqubits']
+
+        # prepare the initial state
+        statelist = []
+        fidx = 0
+        ridx = 0
+        for qubit in self.qubits:
+            # if part of HR, give assigned value by user
+            if qubit in Rqubits:
+                statelist.append(qts.ket(HR_init_state[ridx]))
+                ridx+=1
+            # otherwise, put in equal superposition (i.e. gs of x-basis)
+            else:
+                xstate = (qts.ket('0') - qts.ket('1')).unit()
+                statelist.append(xstate)
+                fidx+=1
+        init_state = qto.tensor(*statelist)
+
+        # Create the numeric Hamiltonian for HR
+        ABfuncs = time_interpolation(r_sch, self.processordata)
+        numericH = get_numeric_H(HR)
+        A = ABfuncs['A(t)']
+        B = ABfuncs['B(t)']
+        HX = numericH['HX']
+        HZ = numericH['HZ']
+        # Define list_H for QuTiP
+        listHR = [[HX, A], [HZ, B]]
+
+        # create the numeric Hamiltonian for HF
+        ABfuncs = time_interpolation(f_sch, self.processordata)
+        numericH = get_numeric_H(HF)
+        A = ABfuncs['A(t)']
+        B = ABfuncs['B(t)']
+        HX = numericH['HX']
+        HZ = numericH['HZ']
+        # "Analytic" or function H(t)
+        analHF = lambda t : A(t)*HX + B(t)*HZ
+        # Define list_H for QuTiP
+        listHF = [[HX, A], [HZ, B]]
+
+        # create the total Hamitlontian of HF + HR
+        list_totH = listHR + listHF
+
+        # run the numerical simulation and find probabilities of each state
+        frem_results = qt.sesolve(list_totH, init_state, times)
+        probs = np.array([abs(frem_results.states[-1][i].flatten()[0])**2 for i in range(self.Hsize)])
+
+        return probs
+
+    def frem_comparison(self, T, sval, ftr):
+        """
+        Performs FREM algorithm and compares it to direct forward annealing.
+
+        inputs:
+        ---------
+        T: total anneal time
+        sval: svalue to go to in reverse annealing/ frem anneal
+        ftr: the ratio of time spent in reverse and forward in frem
+
+        outputs:
+        ---------
+        KL_div - the KL divergence of forward and FREM annealing w.r.t. diagonalization
+        """
+        f_sch = make_numeric_schedule(.1, **{'direction': 'forward', 'ta': T})
+        r_sch = make_numeric_schedule(.1, **{'direction': 'reverse', 'ta': ftr * T,
+                                                'sa': sval, 'tq': (1 - ftr) * T})
+
+        # first, do direct diag on H
+        dprobs = self.diag_H()
+
+        # perform forward anneal
+        fprobs = self.nf_anneal(f_sch)
+
+        # next, find a random partition of H into HR/HF
+        partition = random_partition(self)
+        # get qubits that belong to HR
+        Rqubits = partition['Rqubits']
+        # find the most probable state of Rqubits from forward anneal
+        init_state = ml_measurement(fprobs, self.nqubits)
+
+        # perform reverse anneal using initial state guess
+        rprobs = self.nr_anneal(r_sch, init_state)
+
+        # find initial state of sub-system (i.e. Rqubits)
+        sub_system_state = []
+        for (idx, qs) in enumerate(init_state):
+            if idx in Rqubits:
+                sub_system_state.append(qs)
+        sub_init_state = ''.join([str(i) for i in sub_system_state])
+
+        # perform FREM anneal
+        fremprobs = self.frem_anneal([f_sch, r_sch], partition, sub_init_state)
+
+        # compare the KL_divergence of each method w.r.t. direct diagonlization
+        ## outputs = {'forward': fprobs, 'reverse': rprobs, 'frem': fremprobs}
+        # KLresults = KL_div(dprobs, outputs)
+        # outputs['diag'] = dprobs
+
+        # save data in a pandas dataframe
+        fdata = {'method': 'forward', 'T': T, 's': sval, 'ftr': ftr,
+            'probs': fprobs, 'KL_div': entropy(dprobs, fprobs), 'part_size': self.nqubits}
+        rdata = {'method': 'reverse', 'T': T, 's': sval, 'ftr': ftr,
+            'probs': rprobs, 'KL_div': entropy(dprobs, rprobs), 'part_size': self.nqubits}
+        fremdata = {'method': 'frem', 'T': T, 's': sval, 'ftr': ftr,
+            'probs': fremprobs, 'KL_div': entropy(dprobs, fremprobs), 'part_size': len(Rqubits)}
+
+        self.data = self.data.append(fdata, ignore_index=True)
+        self.data = self.data.append(rdata, ignore_index=True)
+        self.data = self.data.append(fremdata, ignore_index=True)
+
+        return {'fdata': fdata, 'rdata': rdata, 'fremdata': fremdata}
 
     def sudden_anneal_test(self):
         pass
