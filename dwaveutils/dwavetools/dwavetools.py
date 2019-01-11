@@ -17,7 +17,7 @@ import matplotlib.ticker as ticker
 import seaborn as sns
 import random
 
-def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers):
+def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers, ucsize = 8):
     '''
     Heuristically makes the most dense connection motif within a unit
     cell with ucsize qubits whose first (lowest #) qubit is fqbit
@@ -31,17 +31,33 @@ def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers):
     wcopulers: list of working couplings (i.e. [[0, 1], [0, 2],...])
     '''
     H = {}
-    lqubit = fqbit + 7
+    #print(ucsize - 1)
+    lqubit = fqbit + (ucsize-1)
     qubits = []
     couplings = []
     if lqubit in wqubits:
         qubits.append(lqubit)
+        
+    # begin big heuristic loop
+    # flags true when unit cell is heuristically, densely connected
+    #complete = False
+    #while not complete:
+        # find first last qubit that is in working list (adjust later if necessary to end loop)
+    #    if lqubit not in wqubits:
+    #        lqubit -= 1
+    #    else:
+    #        qubit = f
 
     qubit = fqbit
+    #print(fqbit)
+    tries = 0
     # attempt to make connections between qubits in numbered order
-    while qubit < (lqubit):
-        print(qubit)
+    #print(lqubit)
+    #print(qubit < lqubit)
+    while qubit < lqubit and tries < 33:
+        #print(qubit)
         if qubit in wqubits:
+            tries += 1
             qubits.append(qubit)
             # if "left" qubit, add 4 for straight coupling
             # otherwise, subtract 3 for diagaonal coupling
@@ -70,6 +86,7 @@ def densify_unitcell(fqbit, hweight, Jweight, wqubits, wcouplers):
                         else:
                             qubit = ((qubit+5)%8)+fqbit
         else:
+            tries += 1
             if ((qubit % 8) < 4):
                 qubit = ((qubit+4)%8)+fqbit
             else:

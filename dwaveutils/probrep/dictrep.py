@@ -574,10 +574,14 @@ class DictRep(ProbRep):
                                                 'sa': sval, 'tq': (1 - ftr) * T})
 
         # first, do direct diag on H
+        # then extract non-zero entires ("gs" entries)
         dprobs = self.diag_H()
+        nonzeroidxs = np.nonzero(dprobs)
+        gs_dprobs = dprobs[nonzeroidxs]
 
         # perform forward anneal
         fprobs = self.nf_anneal(f_sch)
+        gs_fprobs = fprobs[nonzeroidxs]
 
         # next, find a random partition of H into HR/HF
         partition = random_partition(self)
@@ -588,6 +592,7 @@ class DictRep(ProbRep):
 
         # perform reverse anneal using initial state guess
         rprobs = self.nr_anneal(r_sch, init_state)
+        gs_rprobs = rprobs[nonzeroidxs]
 
         # find initial state of sub-system (i.e. Rqubits)
         sub_system_state = []
@@ -598,19 +603,20 @@ class DictRep(ProbRep):
 
         # perform FREM anneal
         fremprobs = self.frem_anneal([f_sch, r_sch], partition, sub_init_state)
-
-        # compare the KL_divergence of each method w.r.t. direct diagonlization
-        ## outputs = {'forward': fprobs, 'reverse': rprobs, 'frem': fremprobs}
-        # KLresults = KL_div(dprobs, outputs)
-        # outputs['diag'] = dprobs
+        gs_fremprobs = fremprobs[nonzeroidxs]
 
         # save data in a pandas dataframe
         fdata = {'method': 'forward', 'T': T, 's': sval, 'ftr': ftr,
-            'probs': fprobs, 'KL_div': entropy(dprobs, fprobs), 'part_size': self.nqubits}
+                 'part_size': self.nqubits, 'probs': fprobs, 'KL_div': entropy(dprobs, fprobs),
+                 'gs_KL_div': entropy(gs_dprobs, gs_fprobs), 'gs_prob': sum(gs_fprobs)}
+        
         rdata = {'method': 'reverse', 'T': T, 's': sval, 'ftr': ftr,
-            'probs': rprobs, 'KL_div': entropy(dprobs, rprobs), 'part_size': self.nqubits}
+                 'part_size': self.nqubits, 'probs': rprobs, 'KL_div': entropy(dprobs, rprobs),
+                 'gs_KL_div': entropy(gs_dprobs, gs_rprobs), 'gs_prob': sum(gs_rprobs)}
+        
         fremdata = {'method': 'frem', 'T': T, 's': sval, 'ftr': ftr,
-            'probs': fremprobs, 'KL_div': entropy(dprobs, fremprobs), 'part_size': len(Rqubits)}
+                    'part_size': len(Rqubits), 'probs': fremprobs, 'KL_div': entropy(dprobs, fremprobs),
+                    'gs_KL_div': entropy(gs_dprobs, gs_fremprobs), 'gs_prob': sum(gs_fremprobs)}
 
         self.data = self.data.append(fdata, ignore_index=True)
         self.data = self.data.append(rdata, ignore_index=True)
