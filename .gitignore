@@ -105,3 +105,8 @@ venv.bak/
 
 # a personal testing directory that gets messy
 /personaltests
+
+# ignore junk outputs by default
+*.csv
+*.txt
+*.png
