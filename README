@@ -1,5 +1,6 @@
 Repo designed to make it easier to inteface with D-Wave's quantum annealers, 
-both simulators and real Quantum Processing Units. Currently working on some 
-additional features to make it easier to submit custom problems and 
-adding support with QuTip to run open-system numerical simulations of 
-annealing to compare to D-Wave.
+both simulators and real Quantum Processing Units.
+
+I would like for this project to eventually coexist with qanic. That is, to create
+a single Hamiltonian object that can be D-wave annealed or numerically annealed. 
+However, this is out of the question currently with time. 
